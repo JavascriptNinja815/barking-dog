@@ -1,0 +1,239 @@
+jQuery(document).ready(function($) {
+    
+    // on page load
+  
+    $('#ship-to-different-address-checkbox').click(function () {
+        if($(this).is(':checked')) {
+            $('.shipping_address').slideDown();
+        } else {
+            $('.shipping_address').slideUp();
+        }
+
+        calulate_shipping();
+    });
+
+    $('.edit_order_options_dropdowns, .order_item .qty').change(function(){
+        var tr = $(this).parents('tr');
+        var variatons = $.parseJSON(tr.attr('data-variations'));
+        var qty = parseFloat(tr.find('.qty').val());
+        qty = Number.isInteger(qty) && qty > 0 ? qty : 1;
+
+        $.each(variatons, function(i1, v1) {
+            var selected = 1;
+
+            $.each(v1.attributes, function(i2, v2) {
+                if(v2 !== '') {
+                    i2 = i2.replace('attribute_', '');
+
+                    if(tr.find('.' + i2).val() !== v2) {
+                        selected = 0;
+                    }
+                }
+            });
+
+            if(selected) {
+                var price = (v1.display_price * qty).toFixed(2);
+                tr.find('.product-total').html('<span class="price"><span class="woocommerce-Price-amount amount"><span class="woocommerce-Price-currencySymbol"><?php echo $currency_symbol ?></span>' + price + '</span></span>');
+            }
+        });
+
+        calculate_totals(1);
+    });
+
+    $("#billing_address_1, #billing_address_2, #billing_city, #billing_state, #billing_postcode, #shipping_address_1, #shipping_address_2, #shipping_city, #shipping_state, #shipping_postcode").change(function(){
+        calulate_shipping();
+    });
+
+    $('.order_item .remove').click(function () {
+        if($('.order_item').length > 1) {
+            if(confirm('Are you sure you want to delete this item?')) {
+                $(this).parents('tr.order_item').remove();
+                calculate_totals(1);
+            }
+        }
+    });
+
+    $('#update_order').click(function(){
+        var valid = true;
+        var errs = [];
+
+        $('.woocommerce-NoticeGroup').remove();
+
+        $('.validate-required').each(function(){
+            if($(this).is(":visible")) {
+                var text = $(this).find('.input-text');
+                var state = $(this).find('.state_select');
+
+                if(text.length && $.trim(text.val()) == '') {
+                    var field = text.attr('name').replace('_1', '').replace(/\_/g, ' ');
+                    field = field.toLowerCase().replace(/\b[a-z]/g, function(letter) {
+                        return letter.toUpperCase();
+                    });
+
+                    errs.push('<strong>' + field + '</strong> is a required field.');
+                    $(this).addClass('woocommerce-invalid');
+                    valid = false;
+                }
+                else if(state.length && $.trim(state.val()) == '') {
+                    var field = state.attr('name').replace('_1', '').replace(/\_/g, ' ');
+                    field = field.toLowerCase().replace(/\b[a-z]/g, function(letter) {
+                        return letter.toUpperCase();
+                    });
+
+                    errs.push('<strong>' + field + '</strong> is a required field.');
+                    $(this).addClass('woocommerce-invalid');
+                    valid = false;
+                } else {
+                    $(this).removeClass('woocommerce-invalid');
+                }
+            }
+        });
+
+        var qty_valid = true;
+        $('.order_item .qty').each(function(){
+            var v = parseFloat($(this).val());
+
+            if(Number.isInteger(v) && v > 0) {
+                $(this).removeClass('woocommerce-invalid');
+            } else {
+                qty_valid = valid = false;
+                $(this).addClass('woocommerce-invalid');
+            }
+        });
+
+        if(!qty_valid) {
+            errs.push('<strong>Product Quantity</strong> is invalid.');
+        }
+
+        if(valid) {
+            $('.blockOverlay').show();
+
+            $.ajax({
+                url: "<?php echo get_site_url() ?>/?edit-order-save=1&id=<?php echo $order_id ?>",
+                data: $('#edit-form').serialize(),
+                type: 'POST',
+                dataType: 'JSON',
+                success: function(result){
+                    window.location.href = '<?php echo get_permalink(get_option(\'woocommerce_myaccount_page_id\')); ?>/orders/';
+                }
+            });
+        } else {
+            var h = '<div class="woocommerce-NoticeGroup woocommerce-NoticeGroup-checkout"><ul class="woocommerce-error" role="alert"><li>' + errs.join('</li><li>') + '</li></ul></div>';
+            $(h).insertBefore('#customer_details');
+
+            $('html, body').animate({
+                scrollTop: $("#edit-form").offset().top
+            }, 500);
+        }
+    });
+
+    $('#add-product select').select2({
+        minimumInputLength: 3,
+        escapeMarkup: function( m ) {
+            return m;
+        },
+        ajax: {
+            url: CustomAjax.ajaxurl,
+            dataType: 'json',
+            delay: 250,
+            data: function (params) {
+                return {
+                    term: params.term,
+                    security: CustomAjax.security,
+                    action: 'edit_order_search_product'
+                };
+            },
+            processResults: function( data ) {
+                var terms = [];
+                if (data) {
+                    $.each(data, function(id, text) {
+                        terms.push({id: id, text: text});
+                    });
+                }
+                return {
+                    results: terms
+                };
+            },
+            cache: true
+        }
+    });
+    
+var recalculate = false;
+var cs_timer;
+function calulate_shipping() {
+    $('.shipping td').html('<a href="javascript:void(0)" onclick="get_shipping_charges()"><i class="fa fa-truck"></i> Calculate shipping</a>')
+    recalculate = true;
+
+    window.clearTimeout(cs_timer);
+    cs_timer = window.setTimeout(function(){
+        get_shipping_charges();
+    }, 3000);
+}
+
+var shipping = 0;
+function get_shipping_charges() {
+    $('.blockOverlay').show();
+
+    $.ajax({
+        url: "<?php echo get_site_url() ?>/?edit-order-shipping=1",
+        data: $('#edit-form').serialize(),
+        type: 'POST',
+        dataType: 'JSON',
+        success: function(result){
+            if(result) {
+                $('.shipping td').html('<span class="woocommerce-Price-amount amount"><span class="woocommerce-Price-currencySymbol"><?php echo $currency_symbol ?></span>' + result.cost + '</span>&nbsp;<small class="shipped_via">via ' + result.label + '</small>');
+                shipping = result.cost;
+            } else {
+                $('.shipping td').html('<p>There are no shipping methods available. Please ensure that your address has been entered correctly, or contact us if you need any help.</p><a href="javascript:void(0)" onclick="get_shipping_charges()"><i class="fa fa-truck"></i> Calculate shipping</a>');
+                shipping = 0;
+            }
+            $('.blockOverlay').hide();
+            recalculate = false;
+            calculate_totals(0);
+        }
+    });
+}
+
+function calculate_totals(t) {
+        var subtotal = 0;
+        $('tr.order_item').each(function(){
+            var tr = $(this);
+            var variatons = $.parseJSON(tr.attr('data-variations'));
+            var qty = parseFloat(tr.find('.qty').val());
+            qty = Number.isInteger(qty) && qty > 0 ? qty : 1;
+
+            $.each(variatons, function(i1, v1) {
+                var selected = 1;
+
+                $.each(v1.attributes, function(i2, v2) {
+                    if(v2 !== '') {
+                        i2 = i2.replace('attribute_', '');
+
+                        if(tr.find('.' + i2).val() !== v2) {
+                            selected = 0;
+                        }
+                    }
+                });
+
+                if(selected) {
+                    tr.find('.variation_id').val(v1.variation_id);
+                    subtotal += (v1.display_price * qty);
+                }
+            });
+        });
+
+        var fee = (subtotal*0.05).toFixed(2);
+        var total = (parseFloat(subtotal) + parseFloat(fee) + parseFloat(shipping)).toFixed(2);
+
+        $('.cart_subtotal td').html('<span class="woocommerce-Price-amount amount"><span class="woocommerce-Price-currencySymbol"><?php echo $currency_symbol ?></span>' + subtotal.toFixed(2) + '</span>');
+
+        $('*[class^="fee_"] td').html('<span class="woocommerce-Price-amount amount"><span class="woocommerce-Price-currencySymbol"><?php echo $currency_symbol ?></span>' + fee + '</span>');
+
+        $('.order_total td').html('<span class="woocommerce-Price-amount amount"><span class="woocommerce-Price-currencySymbol"><?php echo $currency_symbol ?></span>' + total + '</span>');
+
+        if(t == 1) {
+            calulate_shipping();
+        }
+    }        
+
+});
